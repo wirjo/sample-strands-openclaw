@@ -273,6 +273,139 @@ exec node dist/index.js
 | **CLI** (Approach 2) | Quick prototyping, simple setups | ~1-2s overhead | Lowest |
 | **Hybrid** (Approach 3) | Mixed workloads (simple + complex) | Varies | Medium |
 
+## Alternative: Direct AgentCore Contract (No Strands)
+
+If you don't need Strands SDK at all, you can implement the AgentCore HTTP contract directly with a raw bridge to OpenClaw. This is the approach used by [`aws-samples/sample-host-openclaw-on-amazon-bedrock-agentcore`](https://github.com/aws-samples/sample-host-openclaw-on-amazon-bedrock-agentcore).
+
+### How the AgentCore Runtime Contract Works
+
+AgentCore Runtime expects a container serving HTTP on `:8080` with:
+
+| Endpoint | Method | Purpose |
+|----------|--------|--------|
+| `/ping` | GET | Health check — return `{"status": "Healthy"}` or `{"status": "HealthyBusy"}` |
+| `/invocations` | POST | Agent invocation — receive prompt, return response |
+
+The container lifecycle is controlled by `/ping`:
+- `"Healthy"` → idle, AgentCore may terminate the microVM
+- `"HealthyBusy"` → processing, AgentCore will NOT terminate
+
+### Architecture (3-layer stack from aws-samples)
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│ Layer 1: AgentCore Contract Server (:8080)                        │
+│   GET /ping → health status                                       │
+│   POST /invocations → route by action (chat/cron/warmup)          │
+│   Secrets prefetch, lifecycle management, cold start shim         │
+├───────────────────────────────────────────────────────────────────┤
+│ Layer 2: Inference Proxy (:18790)                                  │
+│   OpenAI-compatible API → Bedrock ConverseStream                  │
+│   STS scoped creds, model routing, image injection                │
+├───────────────────────────────────────────────────────────────────┤
+│ Layer 3: OpenClaw Gateway (:18789)                                 │
+│   Full agent engine: tools, memory, skills, MCP, sessions         │
+│   Configured to use proxy as its "provider"                       │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+OpenClaw thinks it's talking to an OpenAI-compatible provider at `localhost:18790`, but the proxy translates to Bedrock `ConverseStream` with STS-scoped credentials.
+
+### Chat invocation flow
+
+```
+POST /invocations { action: "chat", message: "...", userId, actorId }
+    │
+    ├── If OpenClaw NOT ready → lightweight-agent shim (direct Bedrock call)
+    │     └── Immediate response while gateway starts (~1-2 min cold start)
+    │
+    └── If OpenClaw ready → WebSocket bridge:
+          1. Connect to ws://127.0.0.1:18789
+          2. Handle connect.challenge → authenticate with gateway token
+          3. Send chat.send { sessionKey: "global", message }
+          4. Collect chat events (delta → streaming, final → done)
+          5. Return response text
+```
+
+### Minimal implementation (without Strands)
+
+```typescript
+// No Strands SDK — raw HTTP server implementing AgentCore contract
+import http from "node:http";
+import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { randomUUID } from "node:crypto";
+
+const client = new GatewayClient({
+  url: "ws://127.0.0.1:18789/ws",
+  clientName: "agentcore-bridge",
+});
+client.start();
+
+let activeTaskCount = 0;
+
+const server = http.createServer(async (req, res) => {
+  // GET /ping — required by AgentCore
+  if (req.method === "GET" && req.url === "/ping") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      status: activeTaskCount > 0 ? "HealthyBusy" : "Healthy",
+      time_of_last_update: Math.floor(Date.now() / 1000),
+    }));
+    return;
+  }
+
+  // POST /invocations — agent invocation
+  if (req.method === "POST" && req.url === "/invocations") {
+    const body = await readBody(req);
+    const { message } = JSON.parse(body);
+
+    activeTaskCount++;
+    try {
+      const result = await client.request<{ reply: string }>("agent", {
+        message,
+        sessionKey: "agentcore-session",
+        idempotencyKey: randomUUID(),
+        timeout: 120,
+      });
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ response: result.reply }));
+    } finally {
+      activeTaskCount--;
+    }
+    return;
+  }
+
+  res.writeHead(404).end();
+});
+
+server.listen(8080, "0.0.0.0");
+
+function readBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve) => {
+    let data = "";
+    req.on("data", (c) => (data += c));
+    req.on("end", () => resolve(data));
+  });
+}
+```
+
+### Comparison: Strands vs Direct Contract
+
+| | **Strands SDK** (this repo's main approach) | **Direct Contract** (aws-samples style) |
+|---|---|---|
+| **Framework** | `BedrockAgentCoreApp` (Fastify, managed) | Raw `http.createServer()` |
+| **Validation** | Zod schema on request body | Manual parsing |
+| **Streaming** | Built-in SSE via async generators | Implement SSE yourself |
+| **Health tracking** | `asyncTask()` decorator, auto HealthyBusy | Manual `activeTaskCount` |
+| **Context propagation** | `AsyncLocalStorage` + `getContext()` | Manual threading |
+| **Cold start handling** | Not handled (assumes gateway ready) | Lightweight agent shim |
+| **Multi-user** | Single session | Per-user identity + DynamoDB |
+| **Boilerplate** | ~10 lines | ~50+ lines (minimal) / ~2000 lines (production) |
+| **Use when** | Focused SDK integration | Full production system with custom lifecycle |
+
+**Bottom line:** Use `BedrockAgentCoreApp` (Strands) when you want managed HTTP plumbing. Go direct when you need full control over request lifecycle, cold start handling, or multi-user routing.
+
 ## Why OpenClaw?
 
 OpenClaw brings capabilities that a bare Strands agent doesn't have out of the box:
