@@ -2,6 +2,8 @@
 
 This sample demonstrates how to invoke [OpenClaw](https://openclaw.ai) from within a [Strands Agents SDK](https://github.com/strands-agents/harness-sdk) invocation handler, deployed on [Amazon Bedrock AgentCore Runtime](https://aws.amazon.com/bedrock/agentcore/).
 
+> **OpenClaw ships a built-in SDK** — `GatewayClient` from `openclaw/plugin-sdk/gateway-runtime` — so you don't need `execSync`. See [Approach 1](#approach-1-gateway-sdk-recommended--no-execsync) below.
+
 ## Architecture
 
 ```
@@ -32,12 +34,72 @@ Both the Strands handler and OpenClaw gateway run on the **same EC2 instance / m
 
 ## Approaches
 
-### Approach 1: CLI Invocation (Recommended — most stable)
+### Approach 1: Gateway SDK (Recommended — no execSync)
 
-Uses `openclaw agent --message` to run a single agent turn through the running gateway. This is the most reliable interface today.
+OpenClaw ships `GatewayClient` in the `openclaw` npm package under `openclaw/plugin-sdk/gateway-runtime`. This connects to the already-running gateway via WebSocket and calls the `agent` method directly — **no subprocess, no shell, no serialization overhead.**
 
 ```typescript
 // src/index.ts
+import { BedrockAgentCoreApp } from "bedrock-agentcore/runtime";
+import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { randomUUID } from "node:crypto";
+
+// Connect to the local OpenClaw gateway (same machine)
+const client = new GatewayClient({
+  url: `ws://127.0.0.1:${process.env.OPENCLAW_PORT || 18789}/ws`,
+  clientName: "strands-agentcore",
+  clientDisplayName: "Strands AgentCore Handler",
+});
+client.start();
+
+const app = new BedrockAgentCoreApp({
+  invocationHandler: {
+    process: async (payload, context) => {
+      const prompt = payload.prompt || "Hello";
+
+      // Call the "agent" method on the gateway — runs a full agent turn
+      const result = await client.request<{ reply: string }>("agent", {
+        message: prompt,
+        sessionKey: `agentcore-${context.requestId || "default"}`,
+        idempotencyKey: randomUUID(),
+        timeout: 120,
+      });
+
+      return { content: [{ text: result.reply }] };
+    },
+  },
+});
+
+app.run();
+```
+
+**How it works:**
+- `GatewayClient` connects via WebSocket to the OpenClaw gateway
+- `client.request("agent", params)` sends a JSON-RPC request to run one agent turn
+- The gateway runs the full agentic loop (tools, memory, skills, MCP servers)
+- Returns the response as a typed object — no parsing needed
+- Session key provides context persistence across invocations
+
+**Agent method parameters** (from `AgentParamsSchema`):
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `message` | string | The prompt (required) |
+| `sessionKey` | string | Persist conversation context across calls |
+| `agentId` | string | Target a specific OpenClaw agent |
+| `model` | string | Override the model |
+| `thinking` | string | Thinking level (off/on/stream) |
+| `timeout` | number | Timeout in seconds |
+| `deliver` | boolean | Also deliver to a channel |
+| `to` | string | Channel delivery target |
+| `idempotencyKey` | string | Deduplication key |
+
+### Approach 2: CLI Invocation (Simpler, shell-based)
+
+If you prefer not to manage a WebSocket connection, use `openclaw agent --message` via subprocess:
+
+```typescript
+// src/index-cli.ts
 import { BedrockAgentCoreApp } from "bedrock-agentcore/runtime";
 import { execSync } from "node:child_process";
 
@@ -46,21 +108,13 @@ const app = new BedrockAgentCoreApp({
     process: async (payload, context) => {
       const prompt = payload.prompt || "Hello";
 
-      // Invoke OpenClaw via CLI — runs one agent turn through the gateway
       const result = execSync(
         `openclaw agent --message ${JSON.stringify(prompt)} --json`,
-        {
-          encoding: "utf-8",
-          timeout: 120_000,
-          env: { ...process.env },
-        }
+        { encoding: "utf-8", timeout: 120_000 }
       );
 
-      // Parse JSON response
       const parsed = JSON.parse(result);
-      return {
-        content: [{ text: parsed.reply || parsed.response || result }],
-      };
+      return { content: [{ text: parsed.reply || result }] };
     },
   },
 });
@@ -68,58 +122,11 @@ const app = new BedrockAgentCoreApp({
 app.run();
 ```
 
-**How `openclaw agent` works:**
-- Sends a message to the **already-running** OpenClaw gateway
-- The gateway runs a full agent turn (with tools, memory, skills, MCP)
-- Returns the assistant's response
-- Exit code 0 on success
-
-**Flags:**
-| Flag | Description |
-|------|-------------|
-| `--message`, `-m` | The prompt to send (required) |
-| `--json` | Output structured JSON |
-| `--to` | Optional: deliver response to a channel target |
-| `--deliver` | Optional: send the reply to the target |
-
-### Approach 2: HTTP API (Lower latency)
-
-If OpenClaw's gateway HTTP API is accessible locally, you can call it directly without process spawn overhead:
-
-```typescript
-// src/index-http.ts
-import { BedrockAgentCoreApp } from "bedrock-agentcore/runtime";
-
-const OPENCLAW_PORT = process.env.OPENCLAW_PORT || "18789";
-const OPENCLAW_URL = `http://127.0.0.1:${OPENCLAW_PORT}`;
-
-const app = new BedrockAgentCoreApp({
-  invocationHandler: {
-    process: async (payload, context) => {
-      const prompt = payload.prompt || "Hello";
-
-      const response = await fetch(`${OPENCLAW_URL}/api/v1/agent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: prompt }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`OpenClaw error: ${response.status}`);
-      }
-
-      const result = await response.json();
-      return {
-        content: [{ text: result.reply || JSON.stringify(result) }],
-      };
-    },
-  },
-});
-
-app.run();
-```
-
-> **Note:** The HTTP API endpoint and schema should be validated against your OpenClaw version. The CLI approach (Approach 1) is the documented stable interface.
+**Trade-offs vs SDK:**
+- ✅ Simpler (no connection management)
+- ❌ ~1-2s process spawn overhead per invocation
+- ❌ Not streaming
+- ❌ Shell escaping concerns with complex prompts
 
 ### Approach 3: Hybrid — Strands Agent + OpenClaw as Tool
 
@@ -129,13 +136,23 @@ Use the Strands SDK agent loop for orchestration, but delegate complex tasks to 
 // src/index-hybrid.ts
 import { BedrockAgentCoreApp } from "bedrock-agentcore/runtime";
 import { Agent } from "@strands-agents/sdk";
-import { execSync } from "node:child_process";
+import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { randomUUID } from "node:crypto";
+
+// OpenClaw SDK client
+const client = new GatewayClient({
+  url: `ws://127.0.0.1:${process.env.OPENCLAW_PORT || 18789}/ws`,
+  clientName: "strands-tool",
+});
+client.start();
 
 // Define OpenClaw as a Strands tool
 const openclawTool = {
   name: "openclaw",
   description:
-    "Invoke the OpenClaw AI agent for complex tasks requiring tools, memory, web search, file access, or multi-step reasoning. OpenClaw has access to MCP servers, persistent memory, and can execute code.",
+    "Invoke the OpenClaw AI agent for complex tasks requiring tools, memory, " +
+    "web search, file access, or multi-step reasoning. OpenClaw has access to " +
+    "MCP servers, persistent memory, and can execute code.",
   schema: {
     type: "object" as const,
     properties: {
@@ -147,11 +164,12 @@ const openclawTool = {
     required: ["task"],
   },
   handler: async (input: { task: string }) => {
-    const result = execSync(
-      `openclaw agent --message ${JSON.stringify(input.task)} --json`,
-      { encoding: "utf-8", timeout: 120_000 }
-    );
-    return JSON.parse(result).reply || result;
+    const result = await client.request<{ reply: string }>("agent", {
+      message: input.task,
+      idempotencyKey: randomUUID(),
+      timeout: 120,
+    });
+    return result.reply;
   },
 };
 
@@ -159,7 +177,8 @@ const openclawTool = {
 const agent = new Agent({
   tools: [openclawTool],
   system:
-    "You are a helpful assistant. For complex tasks that need web search, file access, code execution, or persistent memory, use the openclaw tool.",
+    "You are a helpful assistant. For complex tasks that need web search, " +
+    "file access, code execution, or persistent memory, use the openclaw tool.",
 });
 
 const app = new BedrockAgentCoreApp({
@@ -250,9 +269,9 @@ exec node dist/index.js
 
 | Approach | Best for | Latency | Complexity |
 |----------|----------|---------|-----------|
-| **CLI** (Approach 1) | Reliability, stable interface | ~1-2s overhead | Low |
-| **HTTP** (Approach 2) | Low-latency production | Minimal | Medium |
-| **Hybrid** (Approach 3) | Mixed workloads (simple + complex) | Varies | Higher |
+| **SDK** (Approach 1) | Production, low latency, type-safe | Minimal | Low |
+| **CLI** (Approach 2) | Quick prototyping, simple setups | ~1-2s overhead | Lowest |
+| **Hybrid** (Approach 3) | Mixed workloads (simple + complex) | Varies | Medium |
 
 ## Why OpenClaw?
 

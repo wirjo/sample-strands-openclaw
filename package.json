@@ -2,6 +2,7 @@
   "name": "sample-strands-openclaw",
   "version": "1.0.0",
   "description": "Sample: Invoke OpenClaw from Strands SDK on AgentCore Runtime",
+  "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -10,7 +11,8 @@
   },
   "dependencies": {
     "@strands-agents/sdk": "^0.1.0",
-    "bedrock-agentcore": "^0.1.0"
+    "bedrock-agentcore": "^0.1.0",
+    "openclaw": "^2026.3.0"
   },
   "devDependencies": {
     "tsx": "^4.0.0",
