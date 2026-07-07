@@ -341,7 +341,7 @@ const result = await runEmbeddedPiAgent({
 
 ### Feature Request
 
-For native AgentCore Runtime support, see: [openclaw/openclaw#XXXXX](https://github.com/openclaw/openclaw/issues) _(issue to be filed)_
+For native AgentCore Runtime support, see: [openclaw/openclaw#101627](https://github.com/openclaw/openclaw/issues/101627)
 
 The request would cover:
 - Native HTTP mode serving the AgentCore contract (`:8080`, `/invoke`, `/ping`)
