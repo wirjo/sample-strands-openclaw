@@ -23,7 +23,7 @@ This sample demonstrates how to invoke [OpenClaw](https://openclaw.ai) from with
     Client Request              Amazon Bedrock
 ```
 
-Both the Strands handler and OpenClaw gateway run on the **same EC2 instance / microVM**. The Strands handler receives invocations from AgentCore and delegates to OpenClaw via its CLI or local HTTP API.
+Both the Strands handler and OpenClaw gateway run on the **same EC2 instance / microVM**. The Strands handler receives invocations from AgentCore and delegates to OpenClaw via WebSocket SDK or CLI.
 
 ## Prerequisites
 
@@ -47,6 +47,7 @@ import { randomUUID } from "node:crypto";
 // Connect to the local OpenClaw gateway (same machine)
 const client = new GatewayClient({
   url: `ws://127.0.0.1:${process.env.OPENCLAW_PORT || 18789}`,
+  token: process.env.OPENCLAW_GATEWAY_TOKEN, // Required if gateway auth is enabled
   clientName: "strands-agentcore",
   clientDisplayName: "Strands AgentCore Handler",
 });
