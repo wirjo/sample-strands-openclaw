@@ -285,6 +285,69 @@ OpenClaw brings capabilities that a bare Strands agent doesn't have out of the b
 
 By wrapping OpenClaw inside a Strands invocation handler, you get the best of both worlds: AgentCore's serverless scaling + OpenClaw's rich agent capabilities.
 
+## Current Limitations & Future Direction
+
+All approaches above require **two processes** on the same machine: the AgentCore HTTP handler (`:8080`) and the OpenClaw gateway daemon (`:18789`). This is because OpenClaw's gateway speaks its own WebSocket protocol, not the AgentCore HTTP contract.
+
+### What Would Be Ideal
+
+A native AgentCore mode where OpenClaw serves the `/invoke` + `/ping` HTTP contract directly:
+
+```bash
+# Hypothetical future command
+openclaw gateway --mode agentcore
+# or
+openclaw serve --agentcore-runtime
+```
+
+This would:
+1. Start a Fastify server on `:8080` implementing the [AgentCore Runtime protocol](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html)
+2. Expose `POST /invoke` → runs an embedded agent turn with full tool/memory/MCP access
+3. Expose `GET /ping` → returns `{"status": "Healthy"}`
+4. Optionally expose `GET /ws` → WebSocket for streaming
+5. Use the local OpenClaw workspace, config, memory, and skills as context
+6. **Single process, no sidecar gateway needed**
+
+### Alternative: Embedded Engine (In-Memory)
+
+OpenClaw exports `runEmbeddedPiAgent` (aliased as `runEmbeddedAgent`) from `openclaw/extension-api` and `openclaw/plugin-sdk/agent-harness`. This runs a full agent turn **in-process** without a separate gateway:
+
+```typescript
+// ⚠️ Deprecated API — internal, undocumented, may break between versions
+import { runEmbeddedPiAgent } from "openclaw/extension-api";
+
+const result = await runEmbeddedPiAgent({
+  sessionId: "my-session",
+  message: "Analyze this data",
+  // Requires: config, model registry, auth storage, workspace, tools...
+});
+
+// Returns: { payloads: [{ text: "..." }], meta: { ... } }
+```
+
+**Status:** This API exists but is:
+- Marked as **deprecated** (emits a process warning on import)
+- Requires extensive setup context (config, model registry, auth storage, session store, workspace dir, tool definitions)
+- Designed for internal gateway use, not external consumers
+- No stability guarantees between OpenClaw versions
+
+### Comparison of Integration Depths
+
+| Depth | Mechanism | Processes | Stability | Setup |
+|-------|-----------|:---------:|-----------|-------|
+| **Sidecar** (current) | GatewayClient SDK → WS → gateway daemon | 2 | ✅ Stable | Low |
+| **Embedded** (possible) | `runEmbeddedPiAgent` in-process | 1 | ⚠️ Internal API | High |
+| **Native** (future) | `openclaw gateway --mode agentcore` | 1 | 🔮 Not yet available | Lowest |
+
+### Feature Request
+
+For native AgentCore Runtime support, see: [openclaw/openclaw#XXXXX](https://github.com/openclaw/openclaw/issues) _(issue to be filed)_
+
+The request would cover:
+- Native HTTP mode serving the AgentCore contract (`:8080`, `/invoke`, `/ping`)
+- Single-process deployment without sidecar gateway
+- Optional: exportable embedded agent function with stable public API
+
 ## Related
 
 - [OpenClaw Documentation](https://docs.openclaw.ai)
