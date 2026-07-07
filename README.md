@@ -46,7 +46,7 @@ import { randomUUID } from "node:crypto";
 
 // Connect to the local OpenClaw gateway (same machine)
 const client = new GatewayClient({
-  url: `ws://127.0.0.1:${process.env.OPENCLAW_PORT || 18789}/ws`,
+  url: `ws://127.0.0.1:${process.env.OPENCLAW_PORT || 18789}`,
   clientName: "strands-agentcore",
   clientDisplayName: "Strands AgentCore Handler",
 });
@@ -141,7 +141,7 @@ import { randomUUID } from "node:crypto";
 
 // OpenClaw SDK client
 const client = new GatewayClient({
-  url: `ws://127.0.0.1:${process.env.OPENCLAW_PORT || 18789}/ws`,
+  url: `ws://127.0.0.1:${process.env.OPENCLAW_PORT || 18789}`,
   clientName: "strands-tool",
 });
 client.start();
@@ -369,7 +369,7 @@ import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { randomUUID } from "node:crypto";
 
 const client = new GatewayClient({
-  url: "ws://127.0.0.1:18789/ws",
+  url: "ws://127.0.0.1:18789",
   clientName: "agentcore-bridge",
 });
 client.start();

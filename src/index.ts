@@ -52,7 +52,7 @@ interface AgentResult {
 
 // --- SDK Approach ---
 // const client = new GatewayClient({
-//   url: `ws://127.0.0.1:${process.env.OPENCLAW_PORT || 18789}/ws`,
+//   url: `ws://127.0.0.1:${process.env.OPENCLAW_PORT || 18789}`,
 //   clientName: "strands-agentcore",
 //   clientDisplayName: "Strands AgentCore Handler",
 // });
