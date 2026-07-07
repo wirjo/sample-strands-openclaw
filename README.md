@@ -202,13 +202,18 @@ This pattern lets Strands handle simple queries directly (lower latency) while d
 # 1. Install dependencies (openclaw provides both the gateway + SDK)
 npm install
 
-# 2. Configure OpenClaw for Bedrock (write to ~/.openclaw/openclaw.json)
-# Option A: Direct Bedrock (IAM role, no proxy)
-openclaw models add amazon-bedrock
+# 2. Configure OpenClaw for Bedrock
+# Option A: AWS env vars (auto-detected by OpenClaw)
+export AWS_ACCESS_KEY_ID="..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_REGION="us-east-1"
 
-# Option B: Via local OpenAI-compatible proxy (as aws-samples does)
-# Configure in openclaw.json:
-#   "models": { "providers": { "my-proxy": { "baseUrl": "http://127.0.0.1:18790/v1", "api": "openai-completions" } } }
+# Option B: EC2/AgentCore instance role (opt-in discovery)
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.enabled true
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.region us-east-1
+
+# Set the model
+openclaw models set "amazon-bedrock/global.anthropic.claude-sonnet-4-6"
 
 # 3. Ensure OpenClaw gateway is running
 openclaw gateway start
