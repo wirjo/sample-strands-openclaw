@@ -227,54 +227,74 @@ npm start
 
 ## Deployment on AgentCore
 
-The Dockerfile runs both OpenClaw gateway and the Strands handler:
+The Dockerfile uses a multi-stage ARM64 build (AgentCore runs on Graviton) with OpenClaw installed globally:
 
 ```dockerfile
-FROM node:22-slim
+# Stage 1: Builder
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/node:22-slim AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates awscli \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl git && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install OpenClaw
+# Install OpenClaw globally (provides gateway + SDK)
 RUN npm install -g openclaw
 
-# Install app dependencies
+# App dependencies
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --production
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev || true
 COPY . .
+RUN npx tsc || true
 
-# Provider configured via openclaw.json at runtime (not env var)
-# See "Bedrock Configuration" section below
+# Stage 2: Runtime
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/node:22-slim
 
-# Start script runs both OpenClaw gateway + Strands handler
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl jq && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy OpenClaw from builder (re-create symlink, don't COPY it)
+COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw
+
+WORKDIR /app
+COPY --from=builder /app /app
+RUN mkdir -p /root/.openclaw
+
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
 EXPOSE 8080
-CMD ["/app/start.sh"]
+ENTRYPOINT ["/app/start.sh"]
 ```
+
+> **Note:** AgentCore runs on ARM64 (Graviton). Use `--platform=linux/arm64` and pull from `public.ecr.aws/docker/library/node:22-slim`. The OpenClaw symlink must be recreated (not copied) to preserve ESM module resolution.
 
 ```bash
 #!/bin/bash
 # start.sh — run OpenClaw gateway in background, then start Strands handler
 set -euo pipefail
 
-# Start OpenClaw gateway in background
-openclaw gateway start &
+# Start OpenClaw gateway (foreground mode, backgrounded)
+openclaw gateway run &
 OPENCLAW_PID=$!
 
-# Wait for gateway to be healthy
-for i in $(seq 1 30); do
+# Wait for gateway to be healthy (up to 60s for cold start)
+echo "Waiting for OpenClaw gateway..."
+for i in $(seq 1 60); do
   if curl -sf http://localhost:18789/health > /dev/null 2>&1; then
-    echo "OpenClaw gateway ready"
+    echo "OpenClaw gateway ready (took ${i}s)"
     break
+  fi
+  if [ "$i" -eq 60 ]; then
+    echo "ERROR: OpenClaw gateway failed to start within 60s"
+    exit 1
   fi
   sleep 1
 done
 
-# Start the Strands AgentCore handler
+# Start the Strands AgentCore handler (foreground, port 8080)
 exec node dist/index.js
 ```
 

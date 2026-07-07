@@ -1,26 +1,49 @@
-FROM node:22-slim
+# ============================================================
+# Stage 1: Builder — install dependencies
+# ============================================================
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/node:22-slim AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates awscli \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl git && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install OpenClaw
+# Install OpenClaw globally (provides gateway + SDK)
 RUN npm install -g openclaw
 
-# Install app dependencies
+# App dependencies
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm install --production || true
+RUN npm install --omit=dev || npm install --production || true
 COPY . .
 
 # Build TypeScript
 RUN npx tsc || true
 
-# Provider is configured in openclaw.json, not via env var.
-# See README for Bedrock setup options.
+# ============================================================
+# Stage 2: Runtime — minimal image
+# ============================================================
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/node:22-slim
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl jq && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy OpenClaw from builder
+COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/openclaw/openclaw.mjs /usr/local/bin/openclaw
+
+# Copy app
+WORKDIR /app
+COPY --from=builder /app /app
+
+# Pre-create OpenClaw workspace
+RUN mkdir -p /root/.openclaw
+
+# Copy entrypoint
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
+# AgentCore Runtime requires port 8080
 EXPOSE 8080
-CMD ["/app/start.sh"]
+
+ENTRYPOINT ["/app/start.sh"]
