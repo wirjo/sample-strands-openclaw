@@ -348,12 +348,37 @@ The request would cover:
 - Single-process deployment without sidecar gateway
 - Optional: exportable embedded agent function with stable public API
 
+## Comparison with aws-samples Reference Architecture
+
+AWS provides a full production deployment sample at [`aws-samples/sample-host-openclaw-on-amazon-bedrock-agentcore`](https://github.com/aws-samples/sample-host-openclaw-on-amazon-bedrock-agentcore). Here's how the two repos compare:
+
+| | **This repo** (wirjo/sample-strands-openclaw) | **aws-samples** (full deployment) |
+|---|---|---|
+| **Purpose** | SDK integration guide | Production reference architecture |
+| **Bridge method** | `GatewayClient` SDK (typed, ~20 LOC) | Raw WebSocket protocol (~2000 LOC) |
+| **Framework** | Strands SDK + `BedrockAgentCoreApp` | Custom `http.createServer()` |
+| **Multi-user** | Single session | Per-user microVM + DynamoDB identity |
+| **Channels** | AgentCore invocation only | Telegram + Slack (webhook routing) |
+| **Cold start** | Assumes gateway running | Lightweight agent shim during ~1-2 min startup |
+| **Persistence** | OpenClaw native (local) | S3-backed workspace sync |
+| **Security** | Basic | STS scoped creds, VPC, Guardrails, KMS, HMAC |
+| **Infra** | Single Dockerfile | Full CDK (VPC, Lambda, DDB, S3, EventBridge) |
+| **Multimodal** | Text only | Images via Telegram/Slack → S3 → Claude |
+| **Complexity** | ~200 LOC total | ~5000+ LOC (bridge + CDK + Lambda + scripts) |
+
+**When to use which:**
+- **This repo** → You want the simplest integration pattern, are building your own infra, or want to understand the SDK approach
+- **aws-samples** → You want a deployable multi-user production system with channels, security hardening, and CDK
+
+Both repos solve the same core problem (bridging OpenClaw's WebSocket protocol to AgentCore's HTTP contract) — this repo does it with the typed SDK in 20 lines; aws-samples does it with a hand-rolled protocol bridge plus full operational concerns.
+
 ## Related
 
+- [aws-samples/sample-host-openclaw-on-amazon-bedrock-agentcore](https://github.com/aws-samples/sample-host-openclaw-on-amazon-bedrock-agentcore) — full CDK production deployment
 - [OpenClaw Documentation](https://docs.openclaw.ai)
 - [Strands Agents SDK](https://github.com/strands-agents/harness-sdk)
 - [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/)
-- [NemoClaw (NVIDIA)](https://github.com/NVIDIA/NemoClaw) — another integration pattern using OpenClaw in sandboxed environments
+- [NemoClaw (NVIDIA)](https://github.com/NVIDIA/NemoClaw) — OpenClaw in sandboxed NVIDIA OpenShell environments
 
 ## License
 
