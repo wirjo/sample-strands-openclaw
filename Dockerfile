@@ -16,8 +16,8 @@ COPY . .
 # Build TypeScript
 RUN npx tsc || true
 
-# Pre-configure OpenClaw for Bedrock (IAM role via IMDS)
-ENV OPENCLAW_PROVIDER=amazon-bedrock
+# Provider is configured in openclaw.json, not via env var.
+# See README for Bedrock setup options.
 
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh

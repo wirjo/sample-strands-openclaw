@@ -199,16 +199,24 @@ This pattern lets Strands handle simple queries directly (lower latency) while d
 ## Setup
 
 ```bash
-# 1. Install dependencies
+# 1. Install dependencies (openclaw provides both the gateway + SDK)
 npm install
 
-# 2. Ensure OpenClaw is installed and running
+# 2. Configure OpenClaw for Bedrock (write to ~/.openclaw/openclaw.json)
+# Option A: Direct Bedrock (IAM role, no proxy)
+openclaw models add amazon-bedrock
+
+# Option B: Via local OpenAI-compatible proxy (as aws-samples does)
+# Configure in openclaw.json:
+#   "models": { "providers": { "my-proxy": { "baseUrl": "http://127.0.0.1:18790/v1", "api": "openai-completions" } } }
+
+# 3. Ensure OpenClaw gateway is running
 openclaw gateway start
 
-# 3. Verify OpenClaw is healthy
+# 4. Verify OpenClaw is healthy
 curl http://localhost:18789/health
 
-# 4. Run the handler
+# 5. Run the handler
 npm start
 ```
 
@@ -232,8 +240,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --production
 COPY . .
 
-# Pre-configure OpenClaw for Bedrock
-ENV OPENCLAW_PROVIDER=amazon-bedrock
+# Provider configured via openclaw.json at runtime (not env var)
+# See "Bedrock Configuration" section below
 
 # Start script runs both OpenClaw gateway + Strands handler
 COPY start.sh /app/start.sh
